@@ -3,7 +3,7 @@ package main
 import (
 	"net"
 	"strings"
-	"errors"
+//	"errors"
 	"fmt"
 	//"math/big"
 	//"encoding/asn1"
@@ -16,7 +16,7 @@ const (
 	OpCodeSCSICommand	= "\x01"
 	OpCodeSCSITaskReq	= "\x02"
 
-	OpCodeTextReq		= "\x04"
+//	OpCodeTextCommand	= "\x04"
 	OpCodeSCSIDataOut	= "\x05"
 	OpCodeLogoutReq 	= "\x06"
 	OpCodeSNACKReq      	= "\x10"
@@ -24,7 +24,7 @@ const (
 	OpCodeSCSIResp		= "\x21"
 	OpCodeSCSITaskResp	= "\x22"
 //	OpCodeLoginResp        	= "\x23"
-	OpCodeTextResp		= "\x24"
+//	OpCodeTextResp		= "\x24"
 	OpCodeSCSIDataIn	= "\x25"
 	OpCodeLogoutResp       	= "\x26"
 //	OpCodeReadyToTransfer  	= "\x31"
@@ -34,7 +34,7 @@ const (
 //	OpCodeFinal		= "\x80"
 //	TransitToNextLoginStage = "\x80"
 //	TextIsComplete		= "\x40"
-//	Status                  = "\x00\x00"
+
 
 )
 // tttaaa
@@ -50,11 +50,13 @@ func (v FieldPack)String() string {
 
 var (
 	OpCodeLoginReq		= byte(0x03)
+	OpCodeLoginResp		= byte(0x23)
 	OpCodeImmed		= byte(0x40)
 	TransitToNextLoginStage	= byte(0x80)
-	OpCodeNSG		= byte(0x01)
-	OpCodeCSG		= byte(0x00)
-	OpCodeLoginResp		= byte(0x23)
+	OpCodeNSG		= byte(0x03)
+	OpCodeCSG		= byte(0x04)
+	OpCodeTextCommand	= byte(0x04)
+	OpCodeTextResp		= byte(0x24)
 	LROpCode		= FieldPack{ 0,2, []byte{0x00, 0x00}}
 	LRVersionMax		= FieldPack{ 2,1, []byte{0x00}}
 	LRVersionMin		= FieldPack{ 3,1, []byte{0x00}}
@@ -62,13 +64,19 @@ var (
 	LRDataSegmentLength	= FieldPack{ 5,3, []byte{0x00, 0x00, 0x00}}
 	LRISID			= FieldPack{ 8,6, []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}
 	LRTSIH			= FieldPack{14,2, []byte{0x01, 0x00}}
-	LRInitiatorTaskTag	= FieldPack{16,4, []byte{0x00, 0x00, 0x00, 0x01}}
+	LRInitiatorTaskTag	= FieldPack{16,4, []byte{0x00, 0x00, 0x00, 0x00}}
 	LRStatSN		= FieldPack{24,4, []byte{0x00, 0x00, 0x00, 0x00}}
 	LRExpCmdSN		= FieldPack{28,4, []byte{0x00, 0x00, 0x00, 0x01}}
 	LRMaxCmdSN		= FieldPack{32,4, []byte{0x00, 0x00, 0x00, 0x02}}
 	LRStatusClass		= FieldPack{36,1, []byte{0x00}}
 	LRStatusDetail		= FieldPack{37,1, []byte{0x00}}
 	LRDataSegment		= FieldPack{48,0, []byte{}}
+	TCFlags			= FieldPack{ 1,1, []byte{0x80}}
+	TCLUN			= FieldPack{ 8,8, []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}
+	TCTargetTransferTag	= FieldPack{20,4, []byte{0xff, 0xff, 0xff, 0xff}}
+	TCCmdSN			= FieldPack{24,4, []byte{0x00, 0x00, 0x00, 0x01}}
+	TCExpStatSN		= FieldPack{28,4, []byte{0x00, 0x00, 0x00, 0x01}}
+
 
 	ISID_t			= byte(0x40)
 	ISID_a			= byte(0x00)
@@ -77,7 +85,7 @@ var (
 	ISID_d			= []byte{0x00, 0x00}
 
 	CID			= FieldPack{20,2, []byte{0x00, 0x00}}
-	CmdSN			= FieldPack{24,4, []byte{0x00, 0x00, 0x00, 0x00}}
+
 
 )
 
@@ -146,16 +154,15 @@ func (c *ISCSIConnection)Get(v FieldPack) FieldPack {
 	return v
 }
 
-func (c *ISCSIConnection)loginCommandProc() (packWrite PacketBuild, err error) {
+func (c *ISCSIConnection)loginCommandProc() (err error) {
+	var packWrite PacketBuild
 
-	dataSegment := []byte("TargetPortalGroupTag=1\x00AuthMethod=None\x00")
+	dataSegment := []byte("TargetPortalGroupTag=1\x00")
 	dataSegmentLength := aligByte(string(len(dataSegment)), 3)
 	LRDataSegmentLength.Value = []byte(dataSegmentLength)
-	fmt.Println(LRDataSegmentLength)
 
 	packWrite.New(48)
 	LROpCode.Value =  []byte{OpCodeLoginResp, TransitToNextLoginStage | OpCodeNSG | OpCodeCSG}
-	fmt.Println(LROpCode)
 
 	packWrite.Set(LROpCode)
 	packWrite.Set(LRVersionMax)
@@ -165,9 +172,11 @@ func (c *ISCSIConnection)loginCommandProc() (packWrite PacketBuild, err error) {
 	packWrite.Set(c.Get(LRISID))
 	packWrite.Set(LRTSIH)
 	packWrite.Set(LRInitiatorTaskTag)
-	packWrite.Set(c.Get(CmdSN))
+	packWrite.Set(LRStatSN)
 	packWrite.Set(LRExpCmdSN)
 	packWrite.Set(LRMaxCmdSN)
+	packWrite.Set(LRStatusClass)
+	packWrite.Set(LRStatusDetail)
 
 	packWrite.Append(dataSegment)
 
@@ -175,27 +184,39 @@ func (c *ISCSIConnection)loginCommandProc() (packWrite PacketBuild, err error) {
 
 	if err := c.Write(packWrite.Packet); err != nil {
 		PrintDeb(err)
-		return packWrite, err
+		return err
 	}
-	fmt.Printf("199 packWrite = % x\n %s\n", packWrite, packWrite)
-	err = c.Read()
-	if err != nil {
-		return packWrite, err
-	}
-	PrintDeb(err)
-	fmt.Printf("195 % x\n", c.Packet)
-
-	if c.Packet[0] == OpCodeImmed | OpCodeLoginReq {
-		PrintDeb("login Command II.")
-	} else {
-		PrintDeb("Unknown Command in login phase.")
-		err = errors.New("Unknown Command in login phase.")
-		return packWrite, err
-	}
-
-	return packWrite, err
+	return err
 }
 
+func (c *ISCSIConnection)textCommand() (err error) {
+	var packWrite PacketBuild
+	c.DecodeParam()
+
+	dataSegment := []byte("TargetName=iqn.2016-04.npp.andy:storage.lun1\x00TargetAddress=172.24.1.3:3260,1\x00\x00\x00")
+	dataSegmentLength := aligByte(string(len(dataSegment)), 3)
+	LRDataSegmentLength.Value = []byte(dataSegmentLength)
+
+	packWrite.New(48)
+	LROpCode.Value =  []byte{OpCodeTextResp}
+	packWrite.Set(LROpCode)
+	packWrite.Set(TCFlags)
+	packWrite.Set(LRTotalAHSLenght)
+	packWrite.Set(LRDataSegmentLength)
+	packWrite.Set(TCLUN)
+	LRInitiatorTaskTag.Value = []byte{0x00, 0x00, 0x00, 0x01}
+	packWrite.Set(LRInitiatorTaskTag)
+	packWrite.Set(TCTargetTransferTag)
+	packWrite.Set(TCCmdSN)
+	packWrite.Set(TCExpStatSN)
+	packWrite.Append(dataSegment)
+
+	if err := c.Write(packWrite.Packet); err != nil {
+		PrintDeb(err)
+		return err
+	}
+	return err
+}
 
 func session(tcpConn *net.TCPConn) bool {
 	var s ISCSIConnection
@@ -205,12 +226,10 @@ func session(tcpConn *net.TCPConn) bool {
 	tcpConn.SetWriteBuffer(1048510)
 	s.TCPConn = tcpConn
 
-	for i := 1; i <= 3; i++ {
+	for i := 1; i <= 4; i++ {
 		PrintDeb("---------", i, "---------")
-		var bufWrite PacketBuild
 		err := s.Read()
-		fmt.Printf("197 ==> % x\n", s.Packet)
-		PrintDeb(s)
+
 		if err != nil {   // Error reading packet
 			PrintDeb(err)
 			continue
@@ -219,7 +238,14 @@ func session(tcpConn *net.TCPConn) bool {
 		switch s.Packet[0] {
 		case OpCodeImmed | OpCodeLoginReq:
 			PrintDeb("login Command.")
-			bufWrite, err = s.loginCommandProc()
+			err = s.loginCommandProc()
+			if err != nil {
+				PrintDeb(err)
+				break
+			}
+		case OpCodeTextCommand:
+			PrintDeb("Text Command.")
+			err = s.textCommand()
 			if err != nil {
 				PrintDeb(err)
 				break
@@ -228,10 +254,6 @@ func session(tcpConn *net.TCPConn) bool {
 			PrintDeb("Unknown operation.")
 		}
 
-		if err := s.Write(bufWrite.Packet); err != nil {
-			PrintDeb(err)
-			continue
-		}
 	}
 	s.TCPConn.Close()
 	return true
