@@ -37,7 +37,7 @@ const (
 
 
 )
-// tttaaa
+
 type FieldPack struct {
 	Begin	int
 	Length	int
