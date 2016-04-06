@@ -75,7 +75,8 @@ var (
 	TCLUN			= FieldPack{ 8,8, []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}
 	TCTargetTransferTag	= FieldPack{20,4, []byte{0xff, 0xff, 0xff, 0xff}}
 	TCCmdSN			= FieldPack{24,4, []byte{0x00, 0x00, 0x00, 0x01}}
-	TCExpStatSN		= FieldPack{28,4, []byte{0x00, 0x00, 0x00, 0x01}}
+	TCExpCmdSN		= FieldPack{28,4, []byte{0x00, 0x00, 0x00, 0x02}}
+	TCMaxCmdSN		= FieldPack{32,4, []byte{0x00, 0x00, 0x00, 0x03}}
 
 
 	ISID_t			= byte(0x40)
@@ -157,9 +158,21 @@ func (c *ISCSIConnection)Get(v FieldPack) FieldPack {
 func (c *ISCSIConnection)loginCommandProc() (err error) {
 	var packWrite PacketBuild
 
-	dataSegment := []byte("TargetPortalGroupTag=1\x00")
+	//dataSegment := alignString("TargetPortalGroupTag=1\x00")
+
+	dataSegment := aligString(	"TargetPortalGroupTag=1\x00"+
+					"HeaderDigest=None\x00"+
+					"DataDigest=None\x00"+
+					"DefaultTime2Wait=2\x00"+
+					"DefaultTime2Retain=0\x00"+
+					"IFMarker=No\x00"+
+					"OFMarker=No\x00"+
+					"ErrorRecoveryLevel=0\x00")
+	PrintDeb(len(dataSegment), string(len(dataSegment)))
 	dataSegmentLength := aligByte(string(len(dataSegment)), 3)
-	LRDataSegmentLength.Value = []byte(dataSegmentLength)
+	PrintDeb(dataSegmentLength)
+	LRDataSegmentLength.Value = dataSegmentLength
+	PrintDeb(LRDataSegmentLength)
 
 	packWrite.New(48)
 	LROpCode.Value =  []byte{OpCodeLoginResp, TransitToNextLoginStage | OpCodeNSG | OpCodeCSG}
@@ -191,9 +204,15 @@ func (c *ISCSIConnection)loginCommandProc() (err error) {
 
 func (c *ISCSIConnection)textCommand() (err error) {
 	var packWrite PacketBuild
+	var dataSegment []byte
 	c.DecodeParam()
-
-	dataSegment := []byte("TargetName=iqn.2016-04.npp.andy:storage.lun1\x00TargetAddress=172.24.1.3:3260,1\x00\x00\x00")
+	if c.Param["SendTargets"] == "All" {
+		dataSegment = aligString(	"TargetName=iqn.2016-04.npp.andy:storage.lun1\x00"+
+						"TargetAddress=172.24.1.3:3260,1\x00")
+	} else {
+		dataSegment = aligString(	"TargetName=None\x00"+
+						"TargetAddress=None\x00")
+	}
 	dataSegmentLength := aligByte(string(len(dataSegment)), 3)
 	LRDataSegmentLength.Value = []byte(dataSegmentLength)
 
@@ -208,7 +227,8 @@ func (c *ISCSIConnection)textCommand() (err error) {
 	packWrite.Set(LRInitiatorTaskTag)
 	packWrite.Set(TCTargetTransferTag)
 	packWrite.Set(TCCmdSN)
-	packWrite.Set(TCExpStatSN)
+	packWrite.Set(TCExpCmdSN)
+	packWrite.Set(TCMaxCmdSN)
 	packWrite.Append(dataSegment)
 
 	if err := c.Write(packWrite.Packet); err != nil {
@@ -292,3 +312,4 @@ func (p *PacketBuild)Set(v FieldPack) {
 func (p PacketBuild)String() string {
 	return fmt.Sprintf("%s", p.Packet)
 }
+

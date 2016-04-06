@@ -20,10 +20,21 @@ func aligByte(s string, c int) []byte {
 		return []byte(s[:c])
 	} else {
 		ar := make([]byte, c-l)
+		PrintDeb(ar, len(ar), s)
 		return append(ar, []byte(s)...)
 	}
 }
-// tttaaa
+
+func aligString(v string) (r []byte) {
+	b := []byte(v)
+	PrintDeb(v)
+	PrintDeb(aligInt(len(b)))
+	r = make([]byte, aligInt(len(b)))
+	copy(r, v)
+	PrintDeb(r)
+	return r
+}
+
 // the function for debugging,
 // it print function name, number of string and specified of variables
 func PrintDeb(s ...interface{}) {
