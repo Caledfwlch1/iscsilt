@@ -136,7 +136,9 @@ func (c ISCSIConnection) String() string {
 
 func (c *ISCSIConnection) DecodeParam() {
 	c.Param = make(map[string]string, 0)
+	PrintDeb(c.Packet[48:])
 	arrString := strings.Split(string(c.Packet[48:]) + string("\x00"), string("\x00"))
+	PrintDeb(arrString, len(arrString))
 	for _, element := range arrString {
 		if strings.Contains(element, "=") {
 			p := strings.Split(element, "=")
@@ -208,11 +210,11 @@ func (c *ISCSIConnection)textCommand() (err error) {
 	c.DecodeParam()
 
 	if c.Param["SendTargets"] == "All" {
-		PrintDeb(c.Param["SendTargets"])
-		dataSegment = aligString("TargetName=iqn.2016-04.npp.sit-1920:storage.lun1\x00TargetAddress=172.24.1.3:3260,1\x00")
+		dataSegment = aligString("TargetName=iqn.2016-04.npp.sit-1920:storage.lun1\x00TargetAddress=172.24.1.3:3260,1")
 		// dataSegment = []byte("TargetName=iqn.2016-04.npp.andy:storage.lun1\x00"+
 		//			"TargetAddress=172.24.1.3:3260,1\x00\x00\x00\x00")
 	} else {
+		PrintDeb(c.Param["SendTargets"])
 		dataSegment = aligString("TargetName=None\x00"+
 					"TargetAddress=None\x00")
 	}
