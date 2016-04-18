@@ -3,10 +3,7 @@ package iscsilt
 import (
 	"net"
 	"strings"
-//	"errors"
 	"fmt"
-	//"math/big"
-	//"encoding/asn1"
 	"io"
 	"os"
 )
