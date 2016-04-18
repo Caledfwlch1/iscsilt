@@ -1,14 +1,17 @@
 // iscsilt
-package main
+package iscsilt
 
 import (
 	"fmt"
 	"net"
 )
 
-// tttaaa
-func main() {
-	var ipForListen = net.TCPAddr{net.ParseIP("0.0.0.0"), 3260, ""}
+type ConfType struct {
+	IP	string
+}
+
+func ISCSIlt(conf ConfType) {
+	var ipForListen = net.TCPAddr{net.ParseIP(conf.IP), 3260, ""}
 	fmt.Println("Start")
 	listen, err := net.ListenTCP("tcp", &ipForListen)
 	defer listen.Close()

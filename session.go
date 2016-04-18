@@ -1,4 +1,4 @@
-package main
+package iscsilt
 
 import (
 	"net"
@@ -7,6 +7,8 @@ import (
 	"fmt"
 	//"math/big"
 	//"encoding/asn1"
+	"io"
+	"os"
 )
 
 const (
@@ -111,10 +113,30 @@ type ISCSIConnection struct {
 	Param	map[string]string
 }
 
+func (c *ISCSIConnection) InitParam() error {
+	c.Param = make(map[string]string, 0)
+	host, err := os.Hostname()
+	if err == nil {
+		c.Param["TargetName"] = "TargetName=iqn.2016-04.npp." + host + ":storage.lun1"
+		PrintDeb(c.Param["TargetName"])
+	} else {
+		fmt.Println("It is impossible to determine the local hostname.")
+	}
+	ip := "172.24.1.3"
+	if err == nil {
+		c.Param["TargetAddress"] = "TargetAddress=172.24.1.3" + ip
+		PrintDeb(c.Param["TargetAddress"])
+	} else {
+		fmt.Println("It is impossible to determine the local ip-address.")
+	}
+	return err
+}
+
 func (c *ISCSIConnection) Read() error {
 	b := make([]byte, LenPacket)
 	c.Packet = make([]byte, 0)
-	n, err := c.TCPConn.Read(b)
+	// n, err := c.TCPConn.Read(b)
+	n, err := io.ReadAtLeast(c.TCPConn, b, 48)
 	c.Packet = b[:n]
 	PrintDeb("Readed bytes = ", n)
 	return err
@@ -135,7 +157,7 @@ func (c ISCSIConnection) String() string {
 }
 
 func (c *ISCSIConnection) DecodeParam() {
-	c.Param = make(map[string]string, 0)
+	// c.Param = make(map[string]string, 0)
 	PrintDeb(c.Packet[48:])
 	arrString := strings.Split(string(c.Packet[48:]) + string("\x00"), string("\x00"))
 	PrintDeb(arrString, len(arrString))
@@ -160,8 +182,6 @@ func (c *ISCSIConnection)Get(v FieldPack) FieldPack {
 func (c *ISCSIConnection)loginCommandProc() (err error) {
 	var packWrite PacketBuild
 
-	//dataSegment := alignString("TargetPortalGroupTag=1\x00")
-
 	dataSegment := aligString(	"TargetPortalGroupTag=1\x00"+
 					"HeaderDigest=None\x00"+
 					"DataDigest=None\x00"+
@@ -171,7 +191,7 @@ func (c *ISCSIConnection)loginCommandProc() (err error) {
 					"OFMarker=No\x00"+
 					"ErrorRecoveryLevel=0\x00")
 	dataSegmentLength := intToByte(len(dataSegment), 6)
-	// dataSegmentLength := aligByte(fmt.Sprintf("%3x", len(dataSegment)), 3)
+
 	PrintDeb(dataSegmentLength)
 	LRDataSegmentLength.Value = dataSegmentLength
 	PrintDeb(LRDataSegmentLength)
@@ -211,8 +231,6 @@ func (c *ISCSIConnection)textCommand() (err error) {
 
 	if c.Param["SendTargets"] == "All" {
 		dataSegment = aligString("TargetName=iqn.2016-04.npp.sit-1920:storage.lun1\x00TargetAddress=172.24.1.3:3260,1")
-		// dataSegment = []byte("TargetName=iqn.2016-04.npp.andy:storage.lun1\x00"+
-		//			"TargetAddress=172.24.1.3:3260,1\x00\x00\x00\x00")
 	} else {
 		PrintDeb(c.Param["SendTargets"])
 		dataSegment = aligString("TargetName=None\x00"+
@@ -251,6 +269,9 @@ func session(tcpConn *net.TCPConn) bool {
 	tcpConn.SetReadBuffer(1048510)
 	tcpConn.SetWriteBuffer(1048510)
 	s.TCPConn = tcpConn
+	if s.InitParam() != nil {
+		return true
+	}
 
 	for i := 1; i <= 4; i++ {
 		PrintDeb("---------", i, "---------")
