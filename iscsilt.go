@@ -4,6 +4,7 @@ package iscsilt
 import (
 	"fmt"
 	"net"
+	"io"
 )
 
 type ConfType struct {
@@ -22,6 +23,10 @@ func ISCSIlt(conf ConfType) {
 
 	for {
 		tcpConn, err := listen.AcceptTCP()
+		//tcpConn.SetKeepAlive(true)
+		//tcpConn.SetKeepAlivePeriod(time.Duration(5 * time.Second)) // !!!!!!!!!!!!!!!!!
+		tcpConn.SetReadBuffer(1048510)
+		tcpConn.SetWriteBuffer(1048510)
 		if err != nil {
 			PrintDeb(err)
 			return
@@ -33,4 +38,3 @@ func ISCSIlt(conf ConfType) {
 	}
 
 }
-

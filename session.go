@@ -33,8 +33,14 @@ const (
 //	OpCodeFinal		= "\x80"
 //	TransitToNextLoginStage = "\x80"
 //	TextIsComplete		= "\x40"
+)
 
-
+const (
+	InitConnection	= iota
+	LoginPhase
+	TextCommandPhase
+	LogOutPhase
+	CloseConnection
 )
 
 type FieldPack struct {
@@ -103,33 +109,37 @@ func (v *BiteAnalize) BiteSet(b byte) {
 	*v = BiteAnalize(b)
 }
 
+type ISCSIReadWriter interface {
+	ReadFrom(r io.Reader) (int, error)
+	WriterTo(w io.Writer) (int, error)
+}
+
 type ISCSIConnection struct {
 	TCPConn *net.TCPConn
-	OpCode	byte
+	iscsiRW ISCSIReadWriter
+//	OpCode	byte
 	Packet	[]byte
 	Param	map[string]string
+	Phase	int
 }
 
-func (c *ISCSIConnection) InitParam() error {
-	c.Param = make(map[string]string, 0)
-	host, err := os.Hostname()
-	if err == nil {
-		c.Param["TargetName"] = "TargetName=iqn.2016-04.npp." + host + ":storage.lun1"
-		PrintDeb(c.Param["TargetName"])
-	} else {
-		fmt.Println("It is impossible to determine the local hostname.")
-	}
-	ip := "172.24.1.3"
-	if err == nil {
-		c.Param["TargetAddress"] = "TargetAddress=172.24.1.3" + ip
-		PrintDeb(c.Param["TargetAddress"])
-	} else {
-		fmt.Println("It is impossible to determine the local ip-address.")
-	}
-	return err
+func (c *ISCSIConnection) ReadFrom(r io.Reader) (int, error) {
+	n, err := io.ReadAtLeast(c, r, 48)
+	PrintDeb("Readed bytes = ", n)
+	return n, err
 }
 
-func (c *ISCSIConnection) Read() error {
+func (c *ISCSIConnection) WriteTo(r io.Writer) (int, error) {
+	l := len(r)
+	if l%2 > 0 {
+		r = append(r, byte(0x00))
+	}
+	n, err := c.TCPConn.Write(r)
+	PrintDeb("Writed bytes = ", n)
+	return n, err
+}
+
+/*func (c *ISCSIConnection) Read() error {
 	b := make([]byte, LenPacket)
 	c.Packet = make([]byte, 0)
 	// n, err := c.TCPConn.Read(b)
@@ -137,8 +147,14 @@ func (c *ISCSIConnection) Read() error {
 	c.Packet = b[:n]
 	PrintDeb("Readed bytes = ", n)
 	return err
-}
-
+} */
+/*
+func readPack(c *net.TCPConn, buf []byte) error {
+	n, err := io.ReadAtLeast(c, buf, 48)
+	PrintDeb("Readed bytes = ", n)
+	return err
+} */
+/*
 func (c *ISCSIConnection) Write(b []byte) error {
 	l := len(b)
 	if l%2 > 0 {
@@ -147,13 +163,23 @@ func (c *ISCSIConnection) Write(b []byte) error {
 	n, err := c.TCPConn.Write(b)
 	PrintDeb("Writed bytes = ", n)
 	return err
-}
+} */
+/*
+func writePack(c *net.TCPConn, buf []byte) error {
+	l := len(buf)
+	if l%2 > 0 {
+		buf = append(buf, byte(0x00))
+	}
+	n, err := c.Write(buf)
+	PrintDeb("Writed bytes = ", n)
+	return err
+} */
 
 func (c ISCSIConnection) String() string {
 	return strings.Replace(fmt.Sprintf("%s", c.Packet), "\x00", "\x20", -1)
 }
 
-func (c *ISCSIConnection) DecodeParam() {
+func (c *ISCSIConnection)DecodeParam() {
 	// c.Param = make(map[string]string, 0)
 	PrintDeb(c.Packet[48:])
 	arrString := strings.Split(string(c.Packet[48:]) + string("\x00"), string("\x00"))
@@ -176,8 +202,10 @@ func (c *ISCSIConnection)Get(v FieldPack) FieldPack {
 	return v
 }
 
-func (c *ISCSIConnection)loginCommandProc() (err error) {
+func (c *ISCSIConnection)loginCommandProc() ([]byte) {
 	var packWrite PacketBuild
+
+	c.Phase = LoginPhase
 
 	dataSegment := aligString(	"TargetPortalGroupTag=1\x00"+
 					"HeaderDigest=None\x00"+
@@ -213,17 +241,19 @@ func (c *ISCSIConnection)loginCommandProc() (err error) {
 	packWrite.Append(dataSegment)
 
 	c.DecodeParam()
-
+/*
 	if err := c.Write(packWrite.Packet); err != nil {
 		PrintDeb(err)
 		return err
-	}
-	return err
+	} */
+	return packWrite.Packet
 }
 
 func (c *ISCSIConnection)textCommand() (err error) {
 	var packWrite PacketBuild
 	var dataSegment []byte
+	c.Phase = TextCommandPhase
+
 	c.DecodeParam()
 
 	if c.Param["SendTargets"] == "All" {
@@ -252,6 +282,7 @@ func (c *ISCSIConnection)textCommand() (err error) {
 
 	packWrite.Append(dataSegment)
 	PrintDeb(packWrite.Packet)
+
 	if err := c.Write(packWrite.Packet); err != nil {
 		PrintDeb(err)
 		return err
@@ -259,52 +290,67 @@ func (c *ISCSIConnection)textCommand() (err error) {
 	return err
 }
 
-func session(tcpConn *net.TCPConn) bool {
-	var s ISCSIConnection
-	//tcpConn.SetKeepAlive(true)
-	//tcpConn.SetKeepAlivePeriod(time.Duration(5 * time.Second)) // !!!!!!!!!!!!!!!!!
-	tcpConn.SetReadBuffer(1048510)
-	tcpConn.SetWriteBuffer(1048510)
-	s.TCPConn = tcpConn
-	if s.InitParam() != nil {
-		return true
+func New(tcpConn *net.TCPConn) (c ISCSIConnection) {
+	c.Phase = InitConnection
+	c.TCPConn = tcpConn
+	c.Param = make(map[string]string, 0)
+	host, err := os.Hostname()
+	if err != nil {
+		host = "localhost"
 	}
+	c.Param["TargetName"] = "TargetName=iqn.2016-04.npp." + host + ":storage.lun1"
+	c.Param["TargetAddress"] = "TargetAddress=" + c.TCPConn.LocalAddr()
 
-	for i := 1; i <= 4; i++ {
+	PrintDeb(c.Param["TargetName"])
+	PrintDeb(c.Param["TargetAddress"])
+
+	return c
+}
+
+func session(tcpConn *net.TCPConn) bool {
+	// var s ISCSIConnection
+	buf := make([]byte, LenPacket)
+
+	s := New(tcpConn)
+
+	for s.Phase != CloseConnection {
 		PrintDeb("---------", i, "---------")
-		err := s.Read()
-
+		PrintDeb("Current phase is ", s.Phase)
+		// err := readPack(tcpConn, buf)
+		_, err := s.ReadFrom()
 		if err != nil {   // Error reading packet
 			PrintDeb(err)
 			continue
 		}
+		s.procPacket(buf)
 
-		switch s.Packet[0] {
-		case OpCodeImmed | OpCodeLoginReq:
-			PrintDeb("login Command.")
-			err = s.loginCommandProc()
-			if err != nil {
-				PrintDeb(err)
-				break
-			}
-		case OpCodeTextCommand:
-			PrintDeb("Text Command.")
-			err = s.textCommand()
-			if err != nil {
-				PrintDeb(err)
-				break
-			}
-		default:
-			PrintDeb("Unknown operation.")
+		// err := writePack(tcpConn, buf)
+		_, err := s.WriteTo(buf)
+		if err != nil {
+			PrintDeb(err)
+			break
 		}
 
 	}
-	s.TCPConn.Close()
+	tcpConn.Close()
 	return true
 }
 
+func (c *ISCSIConnection)procPacket(buf []byte) {
+	switch buf[0] {
+	case OpCodeImmed | OpCodeLoginReq:
+		PrintDeb("login Command.")
+		buf = c.loginCommandProc()
+	case OpCodeTextCommand:
+		PrintDeb("Text Command.")
+		c.textCommand(buf)
+	default:
+		PrintDeb("Unknown operation.")
+	}
+}
+
 type PacketBuild struct{
-	Packet	[]byte
+	Packet	*[]byte
 	maxSize	int
 	Err	[]int
 }
@@ -336,4 +382,7 @@ func (p *PacketBuild)Set(v FieldPack) {
 func (p PacketBuild)String() string {
 	return fmt.Sprintf("%s", p.Packet)
 }
+
+
+
 
