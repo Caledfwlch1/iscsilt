@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	//"container/list"
 )
 
 const (
-	LenPacket 		= 1048510 // 2048
+	LenPacket 		= 2048 //   1048510
 
 	OpCodeNOPOut		= "\x00"
 	OpCodeSCSICommand	= "\x01"
@@ -109,35 +110,276 @@ func (v *BiteAnalize) BiteSet(b byte) {
 	*v = BiteAnalize(b)
 }
 
-type ISCSIReadWriter interface {
-	ReadFrom(r io.Reader) (int, error)
-	WriterTo(w io.Writer) (int, error)
-}
-
 type ISCSIConnection struct {
 	TCPConn *net.TCPConn
-	iscsiRW ISCSIReadWriter
-//	OpCode	byte
-	Packet	[]byte
 	Param	map[string]string
 	Phase	int
 }
 
-func (c *ISCSIConnection) ReadFrom(r io.Reader) (int, error) {
-	n, err := io.ReadAtLeast(c, r, 48)
-	PrintDeb("Readed bytes = ", n)
-	return n, err
+type Packet struct {
+	P	[]byte
+	L	int
 }
 
-func (c *ISCSIConnection) WriteTo(r io.Writer) (int, error) {
-	l := len(r)
-	if l%2 > 0 {
-		r = append(r, byte(0x00))
+func (p *Packet)FullPack() []byte {
+	return p.P[:p.L]
+}
+
+func (p *Packet)DataPack() []byte {
+	return p.P[48:p.L]
+}
+
+func (c *ISCSIConnection) ReadFrom(p *Packet) (error) {
+	n, err := io.ReadAtLeast(c.TCPConn, p.P, 48)
+	p.L = n
+	PrintDeb("Readed bytes = ", p.L)
+	// r = r[:n]
+	return err
+}
+
+func (c *ISCSIConnection) WriteTo(p *Packet) (int, error) {
+	//l := len(r)
+	//l := r.Len
+	if p.L%2 > 0 {
+		p.L++
+		//r = append(r, byte(0x00))
+		//r.Grow(l+1)
 	}
-	n, err := c.TCPConn.Write(r)
+	n, err := c.TCPConn.Write(p.FullPack())
 	PrintDeb("Writed bytes = ", n)
 	return n, err
 }
+
+
+func (c *ISCSIConnection)DecodeParam(p *Packet) {
+
+
+	arrString := strings.Split(string(p.DataPack()) + string("\x00"), string("\x00"))
+
+	for _, element := range arrString {
+		if strings.Contains(element, "=") {
+			ar := strings.Split(element, "=")
+			c.Param[ar[0]] = ar[1]
+		}
+	}
+	return
+}
+
+func (c *ISCSIConnection)Get(p []byte, v FieldPack) FieldPack {
+	if len(p) < v.Begin+v.Length {
+		v.Value = make([]byte, v.Length)
+	} else {
+		v.Value = p[v.Begin:v.Begin + v.Length]
+	}
+	return v
+}
+
+func (c *ISCSIConnection)loginCommandProc(bufin, bufout *Packet) {
+	var packWrite PacketBuild
+
+	c.Phase = LoginPhase
+
+	dataSegment := aligString(	"TargetPortalGroupTag=1\x00"+
+					"HeaderDigest=None\x00"+
+					"DataDigest=None\x00"+
+					"DefaultTime2Wait=2\x00"+
+					"DefaultTime2Retain=0\x00"+
+					"IFMarker=No\x00"+
+					"OFMarker=No\x00"+
+					"ErrorRecoveryLevel=0\x00")
+	dataSegmentLength := intToByte(len(dataSegment), 6)
+
+
+	LRDataSegmentLength.Value = dataSegmentLength
+
+
+	packWrite.New(bufout, 48)
+	LROpCode.Value =  []byte{OpCodeLoginResp, TransitToNextLoginStage | OpCodeNSG | OpCodeCSG}
+
+	packWrite.Set(LROpCode)
+	packWrite.Set(LRVersionMax)
+	packWrite.Set(LRVersionMin)
+	packWrite.Set(LRTotalAHSLenght)
+	packWrite.Set(LRDataSegmentLength)
+	packWrite.Set(c.Get(bufin.FullPack(), LRISID))
+	packWrite.Set(LRTSIH)
+	packWrite.Set(LRInitiatorTaskTag)
+	packWrite.Set(LRStatSN)
+	packWrite.Set(LRExpCmdSN)
+	packWrite.Set(LRMaxCmdSN)
+	packWrite.Set(LRStatusClass)
+	packWrite.Set(LRStatusDetail)
+	LRDataSegment.Value = dataSegment
+	packWrite.Set(LRDataSegment)
+	//packWrite.AlignPacket(len(dataSegment))
+	bufout.L = 48 + len(dataSegment)
+
+	c.DecodeParam(bufin)
+	PrintDeb(bufout)
+	/*if err := c.Write(packWrite.Packet); err != nil {
+		PrintDeb(err)
+		return err
+	} */
+	return
+}
+
+func (c *ISCSIConnection)textCommand(bufin, bufout *Packet) {
+	var packWrite PacketBuild
+	var dataSegment []byte
+	c.Phase = TextCommandPhase
+
+	c.DecodeParam(bufin)
+
+	if c.Param["SendTargets"] == "All" {
+		dataSegment = aligString("TargetName=iqn.2016-04.npp.sit-1920:storage.lun1\x00TargetAddress=172.24.1.3:3260,1")
+	} else {
+		PrintDeb(c.Param["SendTargets"])
+		dataSegment = aligString("TargetName=None\x00"+
+					"TargetAddress=None\x00")
+	}
+	dataSegmentLength := intToByte(len(dataSegment), 6)
+	LRDataSegmentLength.Value = []byte(dataSegmentLength)
+
+	packWrite.New(bufout, 48)
+	LROpCode.Value =  []byte{OpCodeTextResp}
+	packWrite.Set(LROpCode)
+	packWrite.Set(TCFlags)
+	packWrite.Set(LRTotalAHSLenght)
+	packWrite.Set(LRDataSegmentLength)
+	packWrite.Set(TCLUN)
+	LRInitiatorTaskTag.Value = []byte{0x00, 0x00, 0x00, 0x01}
+	packWrite.Set(c.Get(bufin.FullPack(), LRInitiatorTaskTag))
+	packWrite.Set(TCTargetTransferTag)
+	packWrite.Set(TCStatSN)
+	packWrite.Set(TCExpCmdSN)
+	packWrite.Set(TCMaxCmdSN)
+	LRDataSegment.Value = dataSegment
+	packWrite.Set(LRDataSegment)
+	//packWrite.AlignPacket(len(dataSegment))
+	//packWrite.Append(dataSegment)
+	PrintDeb(packWrite.Packet)
+/*
+	if err := c.Write(packWrite.Packet); err != nil {
+		PrintDeb(err)
+		return err
+	} */
+	return
+}
+
+func New(tcpConn *net.TCPConn) (c ISCSIConnection) {
+	c.Phase = InitConnection
+	c.TCPConn = tcpConn
+	c.Param = make(map[string]string, 0)
+	host, err := os.Hostname()
+	if err != nil {
+		host = "localhost"
+	}
+	c.Param["TargetName"] = "TargetName=iqn.2016-04.npp." + host + ":storage.lun1"
+	c.Param["TargetAddress"] = "TargetAddress=" + c.TCPConn.LocalAddr().String()
+
+
+
+
+	return c
+}
+
+func session(tcpConn *net.TCPConn) bool {
+	var bufin, bufout Packet
+	// var s ISCSIConnection
+	//buf := make([]byte, LenPacket)
+	PrintDeb("Run session!")
+	bufin.P  = make([]byte, LenPacket)
+	bufout.P = make([]byte, LenPacket)
+	s := New(tcpConn)
+	i := 1
+	for s.Phase != CloseConnection && i<5{
+		i++
+		PrintDeb("---------", s.Phase, "---------")
+		// err := readPack(tcpConn, buf)
+		err := s.ReadFrom(&bufin)
+		fmt.Printf("300 - session: bufin = %s\n", bufin)
+		if err != nil {   // Error reading packet
+			PrintDeb(err)
+			continue
+		}
+		s.procPacket(&bufin, &bufout)
+
+		// err := writePack(tcpConn, buf)
+		fmt.Printf("308 - session: bufout = %s\n", bufout)
+		_, err = s.WriteTo(&bufout)
+		if err != nil {
+			PrintDeb(err)
+			break
+		}
+
+	}
+	tcpConn.Close()
+	return true
+}
+
+func (c *ISCSIConnection)procPacket(bufin, bufout *Packet) {
+	switch bufin.P[0] {
+	case OpCodeImmed | OpCodeLoginReq:
+		PrintDeb("login Command.")
+		 c.loginCommandProc(bufin, bufout)
+	case OpCodeTextCommand:
+		PrintDeb("Text Command.")
+		c.textCommand(bufin, bufout)
+	default:
+		PrintDeb("Unknown operation.")
+	}
+	return
+}
+
+type PacketBuild struct{
+	Packet	[]byte
+	maxSize	int
+	Err	[]int
+}
+
+func (p *PacketBuild)New(buf *Packet, n int) {
+	p.maxSize = n
+	p.Packet = buf.P
+}
+/*
+func (p *PacketBuild)Append(v []byte) {
+	*p.Packet = append(*p.Packet, v...)
+	p.SetMaxSize(len(*p.Packet))
+	return
+} */
+
+func (p *PacketBuild)SetMaxSize(n int) {
+	p.maxSize = n
+}
+
+func (p *PacketBuild)Set(v FieldPack) {
+	if v.Begin + len(v.Value) > p.maxSize {
+		p.Err = append(p.Err, v.Begin)
+		return
+	}
+
+	_ = copy(p.Packet[v.Begin:], v.Value)
+
+	// _ = copy(p.Packet[v.Begin:], v.Value)
+	return
+}
+
+func (p PacketBuild)String() string {
+	return fmt.Sprintf("%s", p.Packet)
+}
+/*
+func (p *PacketBuild)AlignPacket(n int) {
+	l := n%2
+	if l > 0 {
+		l++
+	}
+	a := *p.Packet
+	a = a[:48 + l]
+	p.Packet = &a
+	return
+}
+
+*/
 
 /*func (c *ISCSIConnection) Read() error {
 	b := make([]byte, LenPacket)
@@ -174,215 +416,9 @@ func writePack(c *net.TCPConn, buf []byte) error {
 	PrintDeb("Writed bytes = ", n)
 	return err
 } */
-
+/*
 func (c ISCSIConnection) String() string {
 	return strings.Replace(fmt.Sprintf("%s", c.Packet), "\x00", "\x20", -1)
-}
-
-func (c *ISCSIConnection)DecodeParam() {
-	// c.Param = make(map[string]string, 0)
-	PrintDeb(c.Packet[48:])
-	arrString := strings.Split(string(c.Packet[48:]) + string("\x00"), string("\x00"))
-	PrintDeb(arrString, len(arrString))
-	for _, element := range arrString {
-		if strings.Contains(element, "=") {
-			p := strings.Split(element, "=")
-			c.Param[p[0]] = p[1]
-		}
-	}
-	return
-}
-
-func (c *ISCSIConnection)Get(v FieldPack) FieldPack {
-	if len(c.Packet) < v.Begin+v.Length {
-		v.Value = make([]byte, v.Length)
-	} else {
-		v.Value = c.Packet[v.Begin:v.Begin + v.Length]
-	}
-	return v
-}
-
-func (c *ISCSIConnection)loginCommandProc() ([]byte) {
-	var packWrite PacketBuild
-
-	c.Phase = LoginPhase
-
-	dataSegment := aligString(	"TargetPortalGroupTag=1\x00"+
-					"HeaderDigest=None\x00"+
-					"DataDigest=None\x00"+
-					"DefaultTime2Wait=2\x00"+
-					"DefaultTime2Retain=0\x00"+
-					"IFMarker=No\x00"+
-					"OFMarker=No\x00"+
-					"ErrorRecoveryLevel=0\x00")
-	dataSegmentLength := intToByte(len(dataSegment), 6)
-
-	PrintDeb(dataSegmentLength)
-	LRDataSegmentLength.Value = dataSegmentLength
-	PrintDeb(LRDataSegmentLength)
-
-	packWrite.New(48)
-	LROpCode.Value =  []byte{OpCodeLoginResp, TransitToNextLoginStage | OpCodeNSG | OpCodeCSG}
-
-	packWrite.Set(LROpCode)
-	packWrite.Set(LRVersionMax)
-	packWrite.Set(LRVersionMin)
-	packWrite.Set(LRTotalAHSLenght)
-	packWrite.Set(LRDataSegmentLength)
-	packWrite.Set(c.Get(LRISID))
-	packWrite.Set(LRTSIH)
-	packWrite.Set(LRInitiatorTaskTag)
-	packWrite.Set(LRStatSN)
-	packWrite.Set(LRExpCmdSN)
-	packWrite.Set(LRMaxCmdSN)
-	packWrite.Set(LRStatusClass)
-	packWrite.Set(LRStatusDetail)
-
-	packWrite.Append(dataSegment)
-
-	c.DecodeParam()
-/*
-	if err := c.Write(packWrite.Packet); err != nil {
-		PrintDeb(err)
-		return err
-	} */
-	return packWrite.Packet
-}
-
-func (c *ISCSIConnection)textCommand() (err error) {
-	var packWrite PacketBuild
-	var dataSegment []byte
-	c.Phase = TextCommandPhase
-
-	c.DecodeParam()
-
-	if c.Param["SendTargets"] == "All" {
-		dataSegment = aligString("TargetName=iqn.2016-04.npp.sit-1920:storage.lun1\x00TargetAddress=172.24.1.3:3260,1")
-	} else {
-		PrintDeb(c.Param["SendTargets"])
-		dataSegment = aligString("TargetName=None\x00"+
-					"TargetAddress=None\x00")
-	}
-	dataSegmentLength := intToByte(len(dataSegment), 6)
-	LRDataSegmentLength.Value = []byte(dataSegmentLength)
-
-	packWrite.New(48)
-	LROpCode.Value =  []byte{OpCodeTextResp}
-	packWrite.Set(LROpCode)
-	packWrite.Set(TCFlags)
-	packWrite.Set(LRTotalAHSLenght)
-	packWrite.Set(LRDataSegmentLength)
-	packWrite.Set(TCLUN)
-	LRInitiatorTaskTag.Value = []byte{0x00, 0x00, 0x00, 0x01}
-	packWrite.Set(c.Get(LRInitiatorTaskTag))
-	packWrite.Set(TCTargetTransferTag)
-	packWrite.Set(TCStatSN)
-	packWrite.Set(TCExpCmdSN)
-	packWrite.Set(TCMaxCmdSN)
-
-	packWrite.Append(dataSegment)
-	PrintDeb(packWrite.Packet)
-
-	if err := c.Write(packWrite.Packet); err != nil {
-		PrintDeb(err)
-		return err
-	}
-	return err
-}
-
-func New(tcpConn *net.TCPConn) (c ISCSIConnection) {
-	c.Phase = InitConnection
-	c.TCPConn = tcpConn
-	c.Param = make(map[string]string, 0)
-	host, err := os.Hostname()
-	if err != nil {
-		host = "localhost"
-	}
-	c.Param["TargetName"] = "TargetName=iqn.2016-04.npp." + host + ":storage.lun1"
-	c.Param["TargetAddress"] = "TargetAddress=" + c.TCPConn.LocalAddr()
-
-	PrintDeb(c.Param["TargetName"])
-	PrintDeb(c.Param["TargetAddress"])
-
-	return c
-}
-
-func session(tcpConn *net.TCPConn) bool {
-	// var s ISCSIConnection
-	buf := make([]byte, LenPacket)
-
-	s := New(tcpConn)
-
-	for s.Phase != CloseConnection {
-		PrintDeb("---------", i, "---------")
-		PrintDeb("Current phase is ", s.Phase)
-		// err := readPack(tcpConn, buf)
-		_, err := s.ReadFrom()
-		if err != nil {   // Error reading packet
-			PrintDeb(err)
-			continue
-		}
-		s.procPacket(buf)
-
-		// err := writePack(tcpConn, buf)
-		_, err := s.WriteTo(buf)
-		if err != nil {
-			PrintDeb(err)
-			break
-		}
-
-	}
-	tcpConn.Close()
-	return true
-}
-
-func (c *ISCSIConnection)procPacket(buf []byte) {
-	switch buf[0] {
-	case OpCodeImmed | OpCodeLoginReq:
-		PrintDeb("login Command.")
-		buf = c.loginCommandProc()
-	case OpCodeTextCommand:
-		PrintDeb("Text Command.")
-		c.textCommand(buf)
-	default:
-		PrintDeb("Unknown operation.")
-	}
-}
-
-type PacketBuild struct{
-	Packet	*[]byte
-	maxSize	int
-	Err	[]int
-}
-
-func (p *PacketBuild)New(n int) {
-	p.maxSize = n
-	p.Packet = make([]byte, n)
-}
-
-func (p *PacketBuild)Append(v []byte) {
-	p.Packet = append(p.Packet, v...)
-	p.SetMaxSize(len(p.Packet))
-	return
-}
-
-func (p *PacketBuild)SetMaxSize(n int) {
-	p.maxSize = n
-}
-
-func (p *PacketBuild)Set(v FieldPack) {
-	if v.Begin + len(v.Value) > p.maxSize {
-		p.Err = append(p.Err, v.Begin)
-		return
-	}
-	_ = copy(p.Packet[v.Begin:], v.Value)
-	return
-}
-
-func (p PacketBuild)String() string {
-	return fmt.Sprintf("%s", p.Packet)
-}
-
-
+} */
 
 

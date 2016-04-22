@@ -28,11 +28,8 @@ func aligByte(s string, c int) []byte {
 
 func aligString(v string) (r []byte) {
 	b := []byte(v)
-	PrintDeb(v)
-	PrintDeb(aligInt(len(b)))
 	r = make([]byte, aligInt(len(b)))
 	copy(r, v)
-	PrintDeb(r)
 	return r
 }
 
