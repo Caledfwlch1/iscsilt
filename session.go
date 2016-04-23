@@ -129,8 +129,13 @@ func (p *Packet)DataPack() []byte {
 	return p.P[48:p.L]
 }
 
+func (p Packet)String() string {
+	return "P = " + string(p.P) + "\nL = " + fmt.Sprint(p.L)
+}
+
 func (c *ISCSIConnection) ReadFrom(p *Packet) (error) {
-	n, err := io.ReadAtLeast(c.TCPConn, p.P, 48)
+	p.P = make([]byte, LenPacket)
+	n, err := io.ReadAtLeast(c.TCPConn, p.P, 49)
 	p.L = n
 	PrintDeb("Readed bytes = ", p.L)
 	// r = r[:n]
@@ -215,7 +220,7 @@ func (c *ISCSIConnection)loginCommandProc(bufin, bufout *Packet) {
 	bufout.L = 48 + len(dataSegment)
 
 	c.DecodeParam(bufin)
-	PrintDeb(bufout)
+
 	/*if err := c.Write(packWrite.Packet); err != nil {
 		PrintDeb(err)
 		return err
@@ -229,7 +234,8 @@ func (c *ISCSIConnection)textCommand(bufin, bufout *Packet) {
 	c.Phase = TextCommandPhase
 
 	c.DecodeParam(bufin)
-
+	PrintDeb("bufin = ", string(bufin.P))
+	PrintDeb("c.Param[\"SendTargets\"] = ", c.Param["SendTargets"])
 	if c.Param["SendTargets"] == "All" {
 		dataSegment = aligString("TargetName=iqn.2016-04.npp.sit-1920:storage.lun1\x00TargetAddress=172.24.1.3:3260,1")
 	} else {
@@ -240,7 +246,7 @@ func (c *ISCSIConnection)textCommand(bufin, bufout *Packet) {
 	dataSegmentLength := intToByte(len(dataSegment), 6)
 	LRDataSegmentLength.Value = []byte(dataSegmentLength)
 
-	packWrite.New(bufout, 48)
+	packWrite.New(bufout, 48 + len(dataSegment))
 	LROpCode.Value =  []byte{OpCodeTextResp}
 	packWrite.Set(LROpCode)
 	packWrite.Set(TCFlags)
@@ -254,10 +260,12 @@ func (c *ISCSIConnection)textCommand(bufin, bufout *Packet) {
 	packWrite.Set(TCExpCmdSN)
 	packWrite.Set(TCMaxCmdSN)
 	LRDataSegment.Value = dataSegment
+	PrintDeb("set of LRDataSegment")
 	packWrite.Set(LRDataSegment)
 	//packWrite.AlignPacket(len(dataSegment))
 	//packWrite.Append(dataSegment)
-	PrintDeb(packWrite.Packet)
+	PrintDeb("LRDataSegment=", string(LRDataSegment.Value))
+	PrintDeb("packWrite.Packet=", string(packWrite.Packet))
 /*
 	if err := c.Write(packWrite.Packet); err != nil {
 		PrintDeb(err)
@@ -297,7 +305,7 @@ func session(tcpConn *net.TCPConn) bool {
 		PrintDeb("---------", s.Phase, "---------")
 		// err := readPack(tcpConn, buf)
 		err := s.ReadFrom(&bufin)
-		fmt.Printf("300 - session: bufin = %s\n", bufin)
+		PrintDeb(bufin)
 		if err != nil {   // Error reading packet
 			PrintDeb(err)
 			continue
@@ -305,7 +313,7 @@ func session(tcpConn *net.TCPConn) bool {
 		s.procPacket(&bufin, &bufout)
 
 		// err := writePack(tcpConn, buf)
-		fmt.Printf("308 - session: bufout = %s\n", bufout)
+		PrintDeb(bufout)
 		_, err = s.WriteTo(&bufout)
 		if err != nil {
 			PrintDeb(err)
@@ -350,6 +358,7 @@ func (p *PacketBuild)Append(v []byte) {
 
 func (p *PacketBuild)SetMaxSize(n int) {
 	p.maxSize = n
+	return
 }
 
 func (p *PacketBuild)Set(v FieldPack) {
@@ -357,8 +366,9 @@ func (p *PacketBuild)Set(v FieldPack) {
 		p.Err = append(p.Err, v.Begin)
 		return
 	}
-
+	PrintDeb(string(v.Value))
 	_ = copy(p.Packet[v.Begin:], v.Value)
+	PrintDeb(p)
 
 	// _ = copy(p.Packet[v.Begin:], v.Value)
 	return
