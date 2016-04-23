@@ -1,6 +1,8 @@
 // iscsilt
 package iscsilt
 
+// interface version
+
 import (
 	"fmt"
 	"net"

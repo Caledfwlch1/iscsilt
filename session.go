@@ -1,5 +1,7 @@
 package iscsilt
 
+// interface version
+
 import (
 	"net"
 	"strings"
