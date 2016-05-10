@@ -7,5 +7,5 @@ func main() {
 
 	config.IP = "172.24.1.3"
 
-	iscsilt.listenISCSI(config)
+	iscsilt.ListenISCSI(config)
 }

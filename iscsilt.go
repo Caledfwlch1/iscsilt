@@ -5,18 +5,14 @@ package iscsilt
 
 import (
 	"fmt"
-	"encoding/binary"
-	"bytes"
-	"io"
 	"net"
-	"strings"
 )
 
 type ConfType struct {
 	IP	string
 }
 
-func listenISCSI(conf ConfType) {
+func ListenISCSI(conf ConfType) {
 	var ipForListen = net.TCPAddr{net.ParseIP(conf.IP), 3260, ""}
 	fmt.Println("Start")
 	listen, err := net.ListenTCP("tcp", &ipForListen)

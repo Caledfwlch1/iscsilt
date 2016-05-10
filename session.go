@@ -55,13 +55,13 @@ type Msg interface {
 	//	Close(io.ReadWriteCloser) (error)
 }
 
-func session(tcpConn *net.TCPConn) {
+func session(tcpConn *net.TCPConn) bool {
 	var h ISCSIConnection
 
 	n, err := h.ReadFrom(tcpConn)
 	fmt.Println("65 - n=", n, "\n65 - err=", err) // , "\n65 - h=", h)
 
-	return
+	return true
 }
 
 func (p *LoginHeader) ReadFrom(r io.Reader) (int, error) {
