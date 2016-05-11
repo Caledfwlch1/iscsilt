@@ -13,7 +13,16 @@ import (
 )
 
 const (
-	LenPacket 		= 2048 //   1048510
+	LenPacket 		= 2048		//   1048510
+	OpCodeLoginReq		= byte(0x03)
+	OpCodeTextCommand	= byte(0x04)
+	OpCodeLoginResp        	= byte(0x23)
+)
+
+var (
+	TransitToNextLoginStage	= byte(0x80)
+	OpCodeNSG		= byte(0x03)
+	OpCodeCSG		= byte(0x04)
 )
 
 type LoginHeader struct {
@@ -26,6 +35,7 @@ type LoginHeader struct {
 	NSG		int		// Next stage
 	VerMax		byte		// 1 byte
 	VerMin		byte		// 1 byte
+	VerActive	byte		// 1 byte
 	TotAHSLen	int		// 1 byte
 	DataSegLen	int		// 3 bytes
 	ISID		[6]byte		// 6 bytes
@@ -34,7 +44,12 @@ type LoginHeader struct {
 	CID		[2]byte		// 2 bytes
 	Res1		[2]byte		// 2 bytes
 	CmdSN		int		// 4 bytes
+	StatSN		[4]byte		// 4 bytes
 	ExpStatSN	int		// 4 bytes
+	ExpCmdSN	[4]byte		// 4 bytes
+	MaxCmdSN	[4]byte		// 4 bytes
+	StatusClass	byte		// 1 byte
+	StatusDetail	byte		// 1 byte
 	Res2		[16]byte	// 16 bytes
 	DataW		[]byte		//
 	msg		Msg
@@ -56,15 +71,42 @@ type Msg interface {
 }
 
 func session(tcpConn *net.TCPConn) bool {
-	var h ISCSIConnection
+	var p ISCSIConnection
 
-	n, err := h.ReadFrom(tcpConn)
-	fmt.Println("65 - n=", n, "\n65 - err=", err) // , "\n65 - h=", h)
+	n, err := p.ReadFrom(tcpConn)
+	fmt.Println("65 - n=", n, "\n65 - err=", err, "\n65 - p=", p)
 
 	return true
 }
 
-func (p *LoginHeader) ReadFrom(r io.Reader) (int, error) {
+func (p *ISCSIConnection)ReadFrom(r io.Reader) (int, error) {
+	var packet []byte
+	n, err := p.LH.ReadFrom(r)
+
+	switch p.LH.OpCode {
+	case OpCodeLoginReq:
+		PrintDeb("login Command.")
+		buf := make([]byte, p.LH.DataSegLen)
+		n, err = io.ReadFull(r, buf)
+		p.Decode(buf)
+		packet = p.loginResponce()
+
+	case OpCodeTextCommand:
+		PrintDeb("Text Command.")
+		p.textResponce()
+	default:
+		PrintDeb("Unknown operation.")
+	}
+
+//	buf := make([]byte, p.LH.DataSegLen)
+//	n, err = io.ReadFull(r, buf)
+//	p.Decode(buf)
+
+
+	return n, err
+}
+
+func (p *LoginHeader)ReadFrom(r io.Reader) (int, error) {
 	buf := make([]byte, 48)
 	n, err := io.ReadFull(r, buf)
 
@@ -87,21 +129,97 @@ func (p *LoginHeader) ReadFrom(r io.Reader) (int, error) {
 	_ = copy(p.Res2[:], buf[32:])
 	p.CmdSN		= int(binary.BigEndian.Uint32(buf[24:28]))
 	p.ExpStatSN	= int(binary.BigEndian.Uint32(buf[28:32]))
-	//p.Res2		= buf[32:]
 	return n, err
 }
 
-func (p *ISCSIConnection)ReadFrom(r io.Reader) (int, error) {
+var (
+	LROpCode		= FieldPack{ 0,2, []byte{0x00, 0x00}}
+	LRVersionMax		= FieldPack{ 2,1, []byte{0x00}}
+	LRVersionMin		= FieldPack{ 3,1, []byte{0x00}}
+	LRVersionActive		= FieldPack{ 3,1, []byte{0x00}}
+	LRTotalAHSLenght	= FieldPack{ 4,1, []byte{0x00}}
+	LRDataSegmentLength	= FieldPack{ 5,3, []byte{0x00, 0x00, 0x00}}
+	LRISID			= FieldPack{ 8,6, []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}
+	LRTSIH			= FieldPack{14,2, []byte{0x01, 0x00}}
+	LRInitiatorTaskTag	= FieldPack{16,4, []byte{0x00, 0x00, 0x00, 0x00}}
+	LRStatSN		= FieldPack{24,4, []byte{0x00, 0x00, 0x00, 0x00}}
+	LRExpCmdSN		= FieldPack{28,4, []byte{0x00, 0x00, 0x00, 0x01}}
+	LRMaxCmdSN		= FieldPack{32,4, []byte{0x00, 0x00, 0x00, 0x02}}
+	LRStatusClass		= FieldPack{36,1, []byte{0x00}}
+	LRStatusDetail		= FieldPack{37,1, []byte{0x00}}
+	LRDataSegment		= FieldPack{48,0, []byte{}}
+	TCFlags			= FieldPack{ 1,1, []byte{0x80}}
+	TCLUN			= FieldPack{ 8,8, []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}
+	TCTargetTransferTag	= FieldPack{20,4, []byte{0xff, 0xff, 0xff, 0xff}}
+	TCStatSN		= FieldPack{24,4, []byte{0x00, 0x00, 0x00, 0x01}}
+	TCExpCmdSN		= FieldPack{28,4, []byte{0x00, 0x00, 0x00, 0x02}}
+	TCMaxCmdSN		= FieldPack{32,4, []byte{0x00, 0x00, 0x00, 0x03}}
+)
 
-	n, err := p.LH.ReadFrom(r)
+func (p *ISCSIConnection)loginResponce() ([]byte) {
+	dataSegment := aligString(	"TargetPortalGroupTag=1\x00"+
+					"HeaderDigest=None\x00"+
+					"DataDigest=None\x00"+
+					"DefaultTime2Wait=2\x00"+
+					"DefaultTime2Retain=0\x00"+
+					"IFMarker=No\x00"+
+					"OFMarker=No\x00"+
+					"ErrorRecoveryLevel=0\x00")
+	dataSegmentLength := intToByte(len(dataSegment), 6)
 
-	buf := make([]byte, p.LH.DataSegLen)
-	n, err = io.ReadFull(r, buf)
+	packet := PacketBuild(make([]byte, 48 + len(dataSegment)))
 
-	p.Decode(buf)
+	LROpCode.Value = []byte{OpCodeLoginResp, TransitToNextLoginStage | OpCodeNSG | OpCodeCSG}
+	packet.Set(LROpCode)
 
+	packet.Set(LRVersionMax)
+	packet.Set(LRVersionActive)
 
-	return n, err
+	LRTotalAHSLenght.Value = []byte{0x00}
+	packet.Set(LRTotalAHSLenght)
+
+	LRDataSegmentLength.Value = dataSegmentLength
+	packet.Set(LRDataSegmentLength)
+
+	LRISID.Value = p.LH.ISID
+	packet.Set(LRISID)
+
+	LRTSIH.Value = []byte{0x01, 0x00}
+	packet.Set(LRTSIH)
+
+	LRInitiatorTaskTag.Value = []byte{0x00, 0x00, 0x00, 0x00}
+	packet.Set(LRInitiatorTaskTag)
+
+	LRStatSN.Value = []byte{0x00, 0x00, 0x00, 0x00}
+	packet.Set(LRStatSN)
+
+	LRExpCmdSN.Value = []byte{0x00, 0x00, 0x00, 0x01}
+	packet.Set(LRExpCmdSN)
+
+	LRMaxCmdSN.Value = []byte{0x00, 0x00, 0x00, 0x02}
+	packet.Set(LRMaxCmdSN)
+
+	LRStatusClass.Value = []byte{0x00}
+	packet.Set(LRStatusClass)
+
+	LRStatusDetail.Value = []byte{0x00}
+	packet.Set(LRStatusDetail)
+
+	LRDataSegment.Value = dataSegment
+	packet.Set(LRDataSegment)
+
+	return []byte(packet)
+}
+
+type PacketBuild []byte
+
+func (p *PacketBuild)Set(v FieldPack) {
+	_ = copy(p[v.Begin:], v.Value)
+	return
+}
+
+func (p *ISCSIConnection)textResponce() {
+	return
 }
 
 func (p *ISCSIConnection) Decode(d []byte) error {
@@ -162,4 +280,13 @@ func (p *ISCSIConnection)MakePacket() {
 	return
 }
 
+type FieldPack struct {
+	Begin	int
+	Length	int
+	Value	[]byte
+}
 
+func (p *LoginHeader)Set(v FieldPack) {
+	_ = copy(p[v.Begin:], v.Value)
+	return
+}
