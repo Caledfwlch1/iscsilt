@@ -38,5 +38,5 @@ func ListenISCSI(conf ConfType) {
 			break
 		}
 	}
-
+	return
 }
