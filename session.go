@@ -15,9 +15,12 @@ import (
 
 const (
 	LenPacket 		= 2048		//   1048510
-	OpCodeLoginReq		= byte(0x03)
-	OpCodeTextCommand	= byte(0x04)
-	OpCodeLoginResp        	= byte(0x23)
+	OpCodeSCSICommand	= byte(0x01)	// Operation code SCSI Command
+	OpCodeSCSICommandResp	= byte(0x21)	// Operation code SCSI Command Response
+	OpCodeLoginReq		= byte(0x03)	// Operation code Login Request
+	OpCodeLoginResp        	= byte(0x23)	// Operation code Login Response
+	OpCodeTextCommand	= byte(0x04)	// Operation code Text Command Request
+	OpCodeTextResp		= byte(0x24)	// Operation code Text Command Response
 )
 
 var (
@@ -35,7 +38,7 @@ type ISCSIHeader struct {
 }
 
 type LoginHeader struct {
-	Header		[48]byte	// Header of the packet
+//	Header		[48]byte	// Header of the packet
 	OpCode		byte		// 1 byte
 	OpCodeSF	byte		// 1 byte OpCodeSpcField
 	I		bool		// Immediate bit
@@ -67,7 +70,6 @@ var _ Msg = (*LoginHeader)(nil)
 
 type ISCSIConnection struct {
 	Header	ISCSIHeader
-	LH	LoginHeader
 	DS	map[string]string	// Login parameters
 	DataR	[]byte			// Data read from ...
 	DataW	[]byte			// Data write to ...
@@ -76,7 +78,6 @@ type ISCSIConnection struct {
 type Msg interface {
 	ReadFrom(io.Reader) (int, error)
 	WriteTo(io.Writer) (int, error)
-	//	Close(io.ReadWriteCloser) (error)
 }
 
 func NewReader(toRead ISCSIHeader) *ISCSIHeader {
@@ -105,56 +106,59 @@ func session(tcpConn *net.TCPConn) bool {
 }
 
 func (p *ISCSIConnection)ReadFrom(r io.Reader) (int, error) {
+	var lh LoginHeader
+	var tc TextHeader
+	p.DS = make(map[string]string, 0)
 	n, err := p.Header.ReadFrom(r)
 	if err != nil || n == 0{
 		return n, err
 	}
-	p.DataR = make([]byte, p.Header.DataSegLen + 1)
+	PrintDeb(p.Header.Raw)
+	p.DataR = make([]byte, 48 + p.Header.DataSegLen)
 	switch p.Header.OpCode {
 	case OpCodeLoginReq:
 		PrintDeb("login Command.")
-		n, err = p.LH.ReadFrom(NewReader(p.Header))
-		n, err = io.ReadFull(r, p.DataR)
-		p.DecodeData()
-		p.loginResponce()
+		n, err = lh.ReadFrom(NewReader(p.Header))
+		//n, err = io.ReadFull(r, p.DataR)
+		n, err = io.ReadAtLeast(r, p.DataR, p.Header.DataSegLen)
+		DecodeData(p.DataR, p.DS)
+		p.loginResponce(lh)
 	case OpCodeTextCommand:
 		PrintDeb("Text Command.")
-		n, err = io.ReadFull(r, p.DataR)
-		p.DecodeData()
-		p.textResponce()
+		n, err = tc.ReadFrom(NewReader(p.Header))
+		// n, err = io.ReadFull(r, p.DataR)
+		n, err = io.ReadAtLeast(r, p.DataR, p.Header.DataSegLen)
+		DecodeData(p.DataR, p.DS)
+		p.textResponce(tc)
 	default:
 		PrintDeb("Unknown operation.")
 		err = errors.New("Unknown operation.")
 	}
 
-//	buf := make([]byte, p.LH.DataSegLen)
-//	n, err = io.ReadFull(r, buf)
-//	p.Decode(buf)
-
 	return n, err
 }
 
 func (p *LoginHeader)ReadFrom(r io.Reader) (int, error) {
+	buf := make([]byte, 48)
+	n, err := io.ReadFull(r, buf)
 
-	n, err := io.ReadFull(r, p.Header[:])
-
-	p.I		= selectBit((p.Header[0]), 0x40)
-	p.OpCode 	= p.Header[0] & 0x3f
-	p.OpCodeSF	= p.Header[1]
+	p.I		= selectBit((buf[0]), 0x40)
+	p.OpCode 	= buf[0] & 0x3f
+	p.OpCodeSF	= buf[1]
 	p.T		= selectBit(p.OpCodeSF, 0x80)
 	p.C		= selectBit(p.OpCodeSF, 0x40)
 	p.CSG		= int(binary.BigEndian.Uint16([]byte{0, selectBits(p.OpCodeSF, 0x0c)}))
 	p.NSG		= int(binary.BigEndian.Uint16([]byte{0, selectBits(p.OpCodeSF, 0x03)}))
-	p.VerMax	= p.Header[2]
-	p.VerMin	= p.Header[3]
-	p.TotAHSLen	= int(binary.BigEndian.Uint16([]byte{0, p.Header[4]}))
-	p.DataSegLen	= int(binary.BigEndian.Uint32(append([]byte{0}, p.Header[5:8]...)))
-	_ = copy(p.ISID[:], p.Header[8:14])
-	_ = copy(p.TSIH[:], p.Header[14:16])
-	_ = copy(p.InitTaskTag[:], p.Header[16:20])
-	_ = copy(p.CID[:], p.Header[20:22])
-	p.CmdSN		= int(binary.BigEndian.Uint32(p.Header[24:28]))
-	p.ExpStatSN	= int(binary.BigEndian.Uint32(p.Header[28:32]))
+	p.VerMax	= buf[2]
+	p.VerMin	= buf[3]
+	p.TotAHSLen	= int(binary.BigEndian.Uint16([]byte{0, buf[4]}))
+	p.DataSegLen	= int(binary.BigEndian.Uint32(append([]byte{0}, buf[5:8]...)))
+	_ = copy(p.ISID[:], buf[8:14])
+	_ = copy(p.TSIH[:], buf[14:16])
+	_ = copy(p.InitTaskTag[:], buf[16:20])
+	_ = copy(p.CID[:], buf[20:22])
+	p.CmdSN		= int(binary.BigEndian.Uint32(buf[24:28]))
+	p.ExpStatSN	= int(binary.BigEndian.Uint32(buf[28:32]))
 
 	return n, err
 }
@@ -191,7 +195,7 @@ var (
 	TCMaxCmdSN		= FieldPack{32,4, []byte{0x00, 0x00, 0x00, 0x03}}
 )
 
-func (p *ISCSIConnection)loginResponce() {
+func (p *ISCSIConnection)loginResponce(lh LoginHeader) {
 	dataSegment := aligString(	"TargetPortalGroupTag=1\x00"+
 					"HeaderDigest=None\x00"+
 					"DataDigest=None\x00"+
@@ -216,7 +220,7 @@ func (p *ISCSIConnection)loginResponce() {
 	LRDataSegmentLength.Value = dataSegmentLength
 	p.Set(LRDataSegmentLength)
 
-	LRISID.Value = p.LH.ISID[:]
+	LRISID.Value = lh.ISID[:]
 	p.Set(LRISID)
 
 	LRTSIH.Value = []byte{0x01, 0x00}
@@ -251,7 +255,33 @@ func (p *ISCSIConnection)Set(v FieldPack) {
 	return
 }
 
-func (p *ISCSIConnection)textResponce() {
+func (p *ISCSIConnection)textResponce(tc TextHeader) {
+	var dataSegment []byte
+
+	if p.DS["SendTargets"] == "All" {
+		dataSegment = aligString("TargetName=iqn.2016-04.npp.sit-1920:storage.lun1\x00TargetAddress=172.24.1.3:3260,1")
+	} else {
+		dataSegment = aligString("TargetName=None\x00"+
+		"TargetAddress=None\x00")
+	}
+	dataSegmentLength := intToByte(len(dataSegment), 6)
+	LRDataSegmentLength.Value = []byte(dataSegmentLength)
+	p.DataW = make([]byte, 48 + len(dataSegment))
+
+	LROpCode.Value =  []byte{OpCodeTextResp}
+	p.Set(LROpCode)
+	p.Set(TCFlags)
+	p.Set(LRTotalAHSLenght)
+	p.Set(LRDataSegmentLength)
+	p.Set(TCLUN)
+	LRInitiatorTaskTag.Value = tc.InitTaskTag[:]
+	p.Set(LRInitiatorTaskTag)
+	p.Set(TCTargetTransferTag)
+	p.Set(TCStatSN)
+	p.Set(TCExpCmdSN)
+	p.Set(TCMaxCmdSN)
+	LRDataSegment.Value = dataSegment
+	p.Set(LRDataSegment)
 
 	return
 }
@@ -274,35 +304,35 @@ type TextHeader struct {
 }
 
 func (p *TextHeader)ReadFrom(r io.Reader) (int, error) {
+	buf := make([]byte, 48)
+	n, err := io.ReadFull(r, buf)
 
-	n, err := io.ReadFull(r, p.Header[:])
-
-	p.I		= selectBit((p.Header[0]), 0x40)
-	p.OpCode 	= p.Header[0] & 0x3f
-	p.OpCodeSF	= p.Header[1]
+	p.I		= selectBit((buf[0]), 0x40)
+	p.OpCode 	= buf[0] & 0x3f
+	p.OpCodeSF	= buf[1]
 	p.F		= selectBit(p.OpCodeSF, 0x80)
 	p.C		= selectBit(p.OpCodeSF, 0x40)
-	p.TotAHSLen	= int(binary.BigEndian.Uint16([]byte{0, p.Header[4]}))
-	p.DataSegLen	= int(binary.BigEndian.Uint32(append([]byte{0}, p.Header[5:8]...)))
-	_ = copy(p.LUN[:], p.Header[8:16])
-	_ = copy(p.InitTaskTag[:], p.Header[16:20])
-	_ = copy(p.TargetTransTag[:], p.Header[20:24])
-	p.CmdSN		= int(binary.BigEndian.Uint32(p.Header[24:28]))
-	p.ExpStatSN	= int(binary.BigEndian.Uint32(p.Header[28:32]))
+	p.TotAHSLen	= int(binary.BigEndian.Uint16([]byte{0, buf[4]}))
+	p.DataSegLen	= int(binary.BigEndian.Uint32(append([]byte{0}, buf[5:8]...)))
+	_ = copy(p.LUN[:], buf[8:16])
+	_ = copy(p.InitTaskTag[:], buf[16:20])
+	_ = copy(p.TargetTransTag[:], buf[20:24])
+	p.CmdSN		= int(binary.BigEndian.Uint32(buf[24:28]))
+	p.ExpStatSN	= int(binary.BigEndian.Uint32(buf[28:32]))
 
 	return n, err
 }
 
-func (p *ISCSIConnection) DecodeData() error {
-	p.DS = make(map[string]string, 0)
-	arrString := strings.Split(string(p.DataR), string("\x00"))
+func DecodeData(buf []byte, ds map[string]string) {
+
+	arrString := strings.Split(string(buf), string("\x00"))
 	for _, element := range arrString {
 		if strings.Contains(element, "=") {
 			ar := strings.Split(element, "=")
-			p.DS[ar[0]] = ar[1]
+			ds[ar[0]] = ar[1]
 		}
 	}
-	return nil
+	return
 }
 
 func selectBit(bi, bc byte) (bool) {
@@ -322,12 +352,17 @@ func (p LoginHeader)String() (string) {
 		p.ExpStatSN)
 }
 
+func (p TextHeader)String() (string) {
+	return fmt.Sprintf("OpCode=%x, OpCodeSF=%x, I=%t, F=%t, C=%t, TotAHSLen=%d, DataSegLen=%d, LUN=%x, InitTaskTag=%x, TargetTransTag=%x, CmdSN=%d, ExpStatSN=%d",
+		p.OpCode, p.OpCodeSF, p.I, p.F, p.C, p.TotAHSLen, p.DataSegLen, p.LUN, p.InitTaskTag, p.TargetTransTag, p.CmdSN, p.ExpStatSN)
+}
+
 func (p ISCSIConnection)String() (string) {
 	out := ""
 	for i, j := range p.DS {
 		out += " " + fmt.Sprint(i) + "=" + fmt.Sprint(j)
 	}
-	return fmt.Sprintf("LoginHeader=%s, \nParam=%s, \nDataW=%s", p.LH, out, p.DataW)
+	return fmt.Sprintf("Param=%s, \nDataW=%s", out, p.DataW)
 }
 
 func (p *ISCSIConnection)WriteTo(w io.Writer) (int, error) {
