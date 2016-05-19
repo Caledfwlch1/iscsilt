@@ -97,7 +97,7 @@ func (p *ISCSIConnection)ReadFrom(r io.Reader) (int, error) {
 	var sc SCSIHeader
 	p.DS = make(map[string]string, 0)
 	n, err := p.Header.ReadFrom(r)
-	if err != nil || n == 0{
+	if err != nil || n < 48 {
 		return n, err
 	}
 	PrintDeb(p.Header.Raw)
@@ -108,14 +108,14 @@ func (p *ISCSIConnection)ReadFrom(r io.Reader) (int, error) {
 		n, err = lh.ReadFrom(NewReader(p.Header))
 		//n, err = io.ReadFull(r, p.DataR)
 		n, err = io.ReadAtLeast(r, p.DataR, p.Header.DataSegLen)
-		DecodeData(p.DataR, p.DS)
+		p.Decode()
 		p.loginResponce(lh)
 	case OpCodeTextCommand:
 		PrintDeb("Text Command.")
 		n, err = tc.ReadFrom(NewReader(p.Header))
 		// n, err = io.ReadFull(r, p.DataR)
 		n, err = io.ReadAtLeast(r, p.DataR, p.Header.DataSegLen)
-		DecodeData(p.DataR, p.DS)
+		p.Decode()
 		p.textResponce(tc)
 	case OpCodeSCSICommand:
 		PrintDeb("SCSI Command.")
@@ -223,12 +223,24 @@ func (p *ISCSIConnection)textResponce(tc TextHeader) {
 	return
 }
 
+func (p *ISCSIConnection)Decode() {
+
+	arrString := strings.Split(string(p.DataR), string("\x00"))
+	for _, element := range arrString {
+		if strings.Contains(element, "=") {
+			ar := strings.Split(element, "=")
+			p.DS[ar[0]] = ar[1]
+		}
+	}
+return
+}
+
+// =============== ISCSI Header ===============
 type ISCSIHeader struct {
 	Raw		[48]byte
 	OpCode		byte		// Operation code
 	TotAHSLen	int		// 1 byte
 	DataSegLen	int		// 3 bytes Data segmetnt length
-	msg		Msg
 }
 
 func (h *ISCSIHeader)Read(p []byte) (n int, err error) {
@@ -239,11 +251,12 @@ func (h *ISCSIHeader)Read(p []byte) (n int, err error) {
 func (p *ISCSIHeader)ReadFrom(r io.Reader) (int, error) {
 	n, err := io.ReadFull(r, p.Raw[:])
 	p.OpCode = p.Raw[0] & 0x3f
-	p.TotAHSLen	= int(binary.BigEndian.Uint16([]byte{0, p.Raw[4]}))
+	p.TotAHSLen	= int(p.Raw[4])
 	p.DataSegLen	= int(binary.BigEndian.Uint32(append([]byte{0}, p.Raw[5:8]...)))
 	return n, err
 }
 
+// =============== Login Command ===============
 type LoginHeader struct {
 	OpCode		byte		// 1 byte
 	OpCodeSF	byte		// 1 byte OpCodeSpcField
@@ -269,7 +282,6 @@ type LoginHeader struct {
 	StatusClass	byte		// 1 byte
 	StatusDetail	byte		// 1 byte
 	DataW		[]byte
-	msg		Msg
 }
 
 func (p *LoginHeader)ReadFrom(r io.Reader) (int, error) {
@@ -281,11 +293,11 @@ func (p *LoginHeader)ReadFrom(r io.Reader) (int, error) {
 	p.OpCodeSF	= buf[1]
 	p.T		= selectBit(p.OpCodeSF, 0x80)
 	p.C		= selectBit(p.OpCodeSF, 0x40)
-	p.CSG		= int(binary.BigEndian.Uint16([]byte{0, selectBits(p.OpCodeSF, 0x0c)}))
-	p.NSG		= int(binary.BigEndian.Uint16([]byte{0, selectBits(p.OpCodeSF, 0x03)}))
+	p.CSG		= int(selectBits(p.OpCodeSF, 0x0c))
+	p.NSG		= int(selectBits(p.OpCodeSF, 0x03))
 	p.VerMax	= buf[2]
 	p.VerMin	= buf[3]
-	p.TotAHSLen	= int(binary.BigEndian.Uint16([]byte{0, buf[4]}))
+	p.TotAHSLen	= int(buf[4])
 	p.DataSegLen	= int(binary.BigEndian.Uint32(append([]byte{0}, buf[5:8]...)))
 	_ = copy(p.ISID[:], buf[8:14])
 	_ = copy(p.TSIH[:], buf[14:16])
@@ -297,6 +309,7 @@ func (p *LoginHeader)ReadFrom(r io.Reader) (int, error) {
 	return n, err
 }
 
+// =============== Text Command ===============
 type TextHeader struct {
 						     //	Header		[48]byte	// Header of the packet
 	OpCode		byte		// 1 byte
@@ -311,7 +324,6 @@ type TextHeader struct {
 	TargetTransTag	[4]byte		// 4 bytes
 	CmdSN		int		// 4 bytes
 	ExpStatSN	int		// 4 bytes
-	msg		Msg
 }
 
 func (p *TextHeader)ReadFrom(r io.Reader) (int, error) {
@@ -323,7 +335,7 @@ func (p *TextHeader)ReadFrom(r io.Reader) (int, error) {
 	p.OpCodeSF	= buf[1]
 	p.F		= selectBit(p.OpCodeSF, 0x80)
 	p.C		= selectBit(p.OpCodeSF, 0x40)
-	p.TotAHSLen	= int(binary.BigEndian.Uint16([]byte{0, buf[4]}))
+	p.TotAHSLen	= int(buf[4])
 	p.DataSegLen	= int(binary.BigEndian.Uint32(append([]byte{0}, buf[5:8]...)))
 	_ = copy(p.LUN[:], buf[8:16])
 	_ = copy(p.InitTaskTag[:], buf[16:20])
@@ -333,7 +345,7 @@ func (p *TextHeader)ReadFrom(r io.Reader) (int, error) {
 
 	return n, err
 }
-
+// =============== SCSI Command ===============
 type SCSIHeader struct {
 	OpCode		byte		// 1 byte
 	OpCodeSF	byte		// 1 byte OpCodeSpcField
@@ -350,7 +362,6 @@ type SCSIHeader struct {
 	CmdSN		int		// 4 bytes
 	ExpStatSN	int		// 4 bytes
 	SCSIComDescBlk	[16]byte	// 16 byte SCSI Command Descriptor Block
-	msg		Msg
 }
 
 func (p *SCSIHeader)ReadFrom(r io.Reader) (int, error) {
@@ -363,8 +374,8 @@ func (p *SCSIHeader)ReadFrom(r io.Reader) (int, error) {
 	p.F		= selectBit(p.OpCodeSF, 0x80)
 	p.R		= selectBit(p.OpCodeSF, 0x40)
 	p.W		= selectBit(p.OpCodeSF, 0x20)
-	p.ATTR		= int(binary.BigEndian.Uint16([]byte{0, selectBit(p.OpCodeSF, 0x07)}))
-	p.TotAHSLen	= int(binary.BigEndian.Uint16([]byte{0, buf[4]}))
+	p.ATTR		= int(selectBits(p.OpCodeSF, 0x07))
+	p.TotAHSLen	= int(buf[4])
 	p.DataSegLen	= int(binary.BigEndian.Uint32(append([]byte{0}, buf[5:8]...)))
 	_ = copy(p.LUN[:], buf[8:16])
 	_ = copy(p.InitTaskTag[:], buf[16:20])
@@ -381,7 +392,7 @@ func (p *ISCSIConnection) SCSICommandResp(sc SCSIHeader) {
 
 	return
 }
-
+/*
 func DecodeData(buf []byte, ds map[string]string) {
 
 	arrString := strings.Split(string(buf), string("\x00"))
@@ -393,7 +404,7 @@ func DecodeData(buf []byte, ds map[string]string) {
 	}
 	return
 }
-
+*/
 func selectBit(bi, bc byte) (bool) {
 	return (bi & bc) == bc
 }
