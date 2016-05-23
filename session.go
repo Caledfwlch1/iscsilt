@@ -21,6 +21,19 @@ const (
 	OpCodeLoginResp        	= byte(0x23)	// Operation code Login Response
 	OpCodeTextCommand	= byte(0x04)	// Operation code Text Command Request
 	OpCodeTextResp		= byte(0x24)	// Operation code Text Command Response
+	OpCodeDataIn		= byte(0x25)	// Operation code SCSI Data In Response
+
+
+	FinalTrue		= byte(0x80)	// Final bit - 1
+	FinalFalse		= byte(0x00)	// Final bit - 0
+	AcknowledgeTrue		= byte(0x40)	// Acknowledge bit - 1
+	AcknowledgeFalse	= byte(0x00)	// Acknowledge bit - 0
+	ResidualOverflowTrue	= byte(0x04)	// Residual Overflow bit - 1
+	ResidualOverflowFalse	= byte(0x00)	// Residual Overflow bit - 0
+	ResidualUnOverflowTrue	= byte(0x02)	// Residual UnOverflow bit - 1
+	ResidualUnOverflowFalse	= byte(0x00)	// Residual UnOverflow bit - 0
+	StatusBitTrue		= byte(0x01)	// Status bit - 1
+	StatusBitFalse		= byte(0x00)	// Status bit - 0
 )
 
 var (
@@ -28,21 +41,22 @@ var (
 	OpCodeNSG		= byte(0x03)
 	OpCodeCSG		= byte(0x04)
 
-	LROpCode		= FieldPack{ 0,2, []byte{0x00, 0x00}}
-	LRVersionMax		= FieldPack{ 2,1, []byte{0x00}}
-	LRVersionMin		= FieldPack{ 3,1, []byte{0x00}}
-	LRVersionActive		= FieldPack{ 3,1, []byte{0x00}}
-	LRTotalAHSLenght	= FieldPack{ 4,1, []byte{0x00}}
-	LRDataSegmentLength	= FieldPack{ 5,3, []byte{0x00, 0x00, 0x00}}
-	LRISID			= FieldPack{ 8,6, []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}
-	LRTSIH			= FieldPack{14,2, []byte{0x01, 0x00}}
-	LRInitiatorTaskTag	= FieldPack{16,4, []byte{0x00, 0x00, 0x00, 0x00}}
-	LRStatSN		= FieldPack{24,4, []byte{0x00, 0x00, 0x00, 0x00}}
-	LRExpCmdSN		= FieldPack{28,4, []byte{0x00, 0x00, 0x00, 0x01}}
-	LRMaxCmdSN		= FieldPack{32,4, []byte{0x00, 0x00, 0x00, 0x02}}
-	LRStatusClass		= FieldPack{36,1, []byte{0x00}}
-	LRStatusDetail		= FieldPack{37,1, []byte{0x00}}
-	LRDataSegment		= FieldPack{48,0, []byte{}}
+	ROpCode			= FieldPack{ 0,2, []byte{0x00, 0x00}}
+	RVersionMax		= FieldPack{ 2,1, []byte{0x00}}
+//	RVersionMin		= FieldPack{ 3,1, []byte{0x00}}
+	RVersionActive		= FieldPack{ 3,1, []byte{0x00}}
+	StatusField		= FieldPack{ 3,1, []byte{0x00}}
+	RTotalAHSLenght		= FieldPack{ 4,1, []byte{0x00}}
+	RDataSegmentLength	= FieldPack{ 5,3, []byte{0x00, 0x00, 0x00}}
+	RISID			= FieldPack{ 8,6, []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}
+	RTSIH			= FieldPack{14,2, []byte{0x01, 0x00}}
+	RInitiatorTaskTag	= FieldPack{16,4, []byte{0x00, 0x00, 0x00, 0x00}}
+	RStatSN			= FieldPack{24,4, []byte{0x00, 0x00, 0x00, 0x00}}
+	RExpCmdSN		= FieldPack{28,4, []byte{0x00, 0x00, 0x00, 0x01}}
+	RMaxCmdSN		= FieldPack{32,4, []byte{0x00, 0x00, 0x00, 0x02}}
+	RStatusClass		= FieldPack{36,1, []byte{0x00}}
+	RStatusDetail		= FieldPack{37,1, []byte{0x00}}
+	RDataSegment		= FieldPack{48,0, []byte{}}
 	TCFlags			= FieldPack{ 1,1, []byte{0x80}}
 	TCLUN			= FieldPack{ 8,8, []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}
 	TCTargetTransferTag	= FieldPack{20,4, []byte{0xff, 0xff, 0xff, 0xff}}
@@ -145,44 +159,44 @@ func (p *ISCSIConnection)loginResponce(lh LoginHeader) {
 
 	p.DataW = make([]byte, 48 + len(dataSegment))
 
-	LROpCode.Value = []byte{OpCodeLoginResp, TransitToNextLoginStage | OpCodeNSG | OpCodeCSG}
-	p.Set(LROpCode)
+	ROpCode.Value = []byte{OpCodeLoginResp, TransitToNextLoginStage | OpCodeNSG | OpCodeCSG}
+	p.Set(ROpCode)
 
-	p.Set(LRVersionMax)
-	p.Set(LRVersionActive)
+	p.Set(RVersionMax)
+	p.Set(RVersionActive)
 
-	LRTotalAHSLenght.Value = []byte{0x00}
-	p.Set(LRTotalAHSLenght)
+	RTotalAHSLenght.Value = []byte{0x00}
+	p.Set(RTotalAHSLenght)
 
-	LRDataSegmentLength.Value = dataSegmentLength
-	p.Set(LRDataSegmentLength)
+	RDataSegmentLength.Value = dataSegmentLength
+	p.Set(RDataSegmentLength)
 
-	LRISID.Value = lh.ISID[:]
-	p.Set(LRISID)
+	RISID.Value = lh.ISID[:]
+	p.Set(RISID)
 
-	LRTSIH.Value = []byte{0x01, 0x00}
-	p.Set(LRTSIH)
+	RTSIH.Value = []byte{0x01, 0x00}
+	p.Set(RTSIH)
 
-	LRInitiatorTaskTag.Value = []byte{0x00, 0x00, 0x00, 0x00}
-	p.Set(LRInitiatorTaskTag)
+	RInitiatorTaskTag.Value = []byte{0x00, 0x00, 0x00, 0x00}
+	p.Set(RInitiatorTaskTag)
 
-	LRStatSN.Value = []byte{0x00, 0x00, 0x00, 0x00}
-	p.Set(LRStatSN)
+	RStatSN.Value = []byte{0x00, 0x00, 0x00, 0x00}
+	p.Set(RStatSN)
 
-	LRExpCmdSN.Value = []byte{0x00, 0x00, 0x00, 0x01}
-	p.Set(LRExpCmdSN)
+	RExpCmdSN.Value = []byte{0x00, 0x00, 0x00, 0x01}
+	p.Set(RExpCmdSN)
 
-	LRMaxCmdSN.Value = []byte{0x00, 0x00, 0x00, 0x02}
-	p.Set(LRMaxCmdSN)
+	RMaxCmdSN.Value = []byte{0x00, 0x00, 0x00, 0x02}
+	p.Set(RMaxCmdSN)
 
-	LRStatusClass.Value = []byte{0x00}
-	p.Set(LRStatusClass)
+	RStatusClass.Value = []byte{0x00}
+	p.Set(RStatusClass)
 
-	LRStatusDetail.Value = []byte{0x00}
-	p.Set(LRStatusDetail)
+	RStatusDetail.Value = []byte{0x00}
+	p.Set(RStatusDetail)
 
-	LRDataSegment.Value = dataSegment
-	p.Set(LRDataSegment)
+	RDataSegment.Value = dataSegment
+	p.Set(RDataSegment)
 
 	return
 }
@@ -202,23 +216,23 @@ func (p *ISCSIConnection)textResponce(tc TextHeader) {
 		"TargetAddress=None\x00")
 	}
 	dataSegmentLength := intToByte(len(dataSegment), 6)
-	LRDataSegmentLength.Value = []byte(dataSegmentLength)
+	RDataSegmentLength.Value = []byte(dataSegmentLength)
 	p.DataW = make([]byte, 48 + len(dataSegment))
 
-	LROpCode.Value =  []byte{OpCodeTextResp}
-	p.Set(LROpCode)
+	ROpCode.Value =  []byte{OpCodeTextResp}
+	p.Set(ROpCode)
 	p.Set(TCFlags)
-	p.Set(LRTotalAHSLenght)
-	p.Set(LRDataSegmentLength)
+	p.Set(RTotalAHSLenght)
+	p.Set(RDataSegmentLength)
 	p.Set(TCLUN)
-	LRInitiatorTaskTag.Value = tc.InitTaskTag[:]
-	p.Set(LRInitiatorTaskTag)
+	RInitiatorTaskTag.Value = tc.InitTaskTag[:]
+	p.Set(RInitiatorTaskTag)
 	p.Set(TCTargetTransferTag)
 	p.Set(TCStatSN)
 	p.Set(TCExpCmdSN)
 	p.Set(TCMaxCmdSN)
-	LRDataSegment.Value = dataSegment
-	p.Set(LRDataSegment)
+	RDataSegment.Value = dataSegment
+	p.Set(RDataSegment)
 
 	return
 }
@@ -311,7 +325,6 @@ func (p *LoginHeader)ReadFrom(r io.Reader) (int, error) {
 
 // =============== Text Command ===============
 type TextHeader struct {
-						     //	Header		[48]byte	// Header of the packet
 	OpCode		byte		// 1 byte
 	OpCodeSF	byte		// 1 byte OpCodeSpcField
 	I		bool		// Immediate bit
@@ -388,7 +401,35 @@ func (p *SCSIHeader)ReadFrom(r io.Reader) (int, error) {
 }
 
 func (p *ISCSIConnection) SCSICommandResp(sc SCSIHeader) {
+	var dataSegment []byte
 
+	//dataSegmentLength := intToByte(len(dataSegment), 6)
+	//RDataSegmentLength.Value = []byte(dataSegmentLength)
+	//p.DataW = make([]byte, 48 + len(dataSegment))
+
+	ROpCode.Value =  []byte{FinalTrue || AcknowledgeFalse || ResidualOverflowFalse || ResidualUnOverflowFalse || StatusBitTrue}
+	p.Set(ROpCode)
+	
+	StatusField.Value = []byte{0x00}
+	p.Set(StatusField)
+
+	RTotalAHSLenght.Value = []byte{0x00}
+	p.Set(RTotalAHSLenght)
+
+	p.Set(RDataSegmentLength)
+
+	p.Set(TCLUN)
+
+	RInitiatorTaskTag.Value = tc.InitTaskTag[:]
+	p.Set(RInitiatorTaskTag)
+
+	p.Set(TCTargetTransferTag)
+
+	p.Set(TCStatSN)
+	p.Set(TCExpCmdSN)
+	p.Set(TCMaxCmdSN)
+	RDataSegment.Value = dataSegment
+	p.Set(RDataSegment)
 
 	return
 }
