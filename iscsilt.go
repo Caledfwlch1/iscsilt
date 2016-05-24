@@ -35,6 +35,7 @@ func ListenISCSI(conf ConfType) {
 		// go session(tcpConn)
 
 		if session(tcpConn) {
+			tcpConn.Close()
 			break
 		}
 	}
